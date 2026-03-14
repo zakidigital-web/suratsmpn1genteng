@@ -310,6 +310,46 @@ export function SuratProvider({ children }: { children: ReactNode }) {
   const [usersSnapshot, setUsersSnapshot] = useState<User[]>(DEFAULT_USERS);
   const [permissionsSnapshot, setPermissionsSnapshot] = useState<RolePermissions>(DEFAULT_PERMISSIONS);
 
+  const syncFromSupabase = async () => {
+    if (!isSupabaseConfigured || !supabase) return;
+    const [
+      masukRes,
+      keluarRes,
+      disposisiRes,
+      templateRes,
+      settingsRes,
+      metaRes,
+      usersRes,
+      permsRes,
+    ] = await Promise.all([
+      supabase.from('surat_masuk').select('*').order('tanggal_surat', { ascending: false }),
+      supabase.from('surat_keluar').select('*').order('tanggal_surat', { ascending: false }),
+      supabase.from('disposisi').select('*').order('created_at', { ascending: false }),
+      supabase.from('surat_templates').select('*').order('nama', { ascending: true }),
+      supabase.from('app_settings').select('data').eq('id', 'school').limit(1),
+      supabase.from('app_meta').select('key,value').in('key', [META_DEMO_MODE, META_BACKUP_HISTORY]),
+      supabase.from('users').select('*').order('name', { ascending: true }),
+      supabase.from('permissions').select('role,features'),
+    ]);
+
+    if (!masukRes.error && masukRes.data) setSuratMasuk(masukRes.data.map(normalizeSuratMasuk));
+    if (!keluarRes.error && keluarRes.data) setSuratKeluar(keluarRes.data.map(normalizeSuratKeluar));
+    if (!disposisiRes.error && disposisiRes.data) setDisposisi(disposisiRes.data.map(normalizeDisposisi));
+    if (!templateRes.error && templateRes.data) setTemplates(templateRes.data.map(normalizeTemplate));
+    if (!settingsRes.error) {
+      const settingsRow = settingsRes.data?.[0];
+      if (settingsRow?.data?.namaSekolah) setSettingsState(settingsRow.data as SchoolSettings);
+    }
+    if (!metaRes.error && metaRes.data) {
+      const demo = metaRes.data.find(m => m.key === META_DEMO_MODE)?.value;
+      const history = metaRes.data.find(m => m.key === META_BACKUP_HISTORY)?.value;
+      if (typeof demo === 'boolean') setDemoModeState(demo);
+      if (Array.isArray(history)) setBackupHistory(history as BackupHistoryItem[]);
+    }
+    if (!usersRes.error && usersRes.data) setUsersSnapshot(usersRes.data.map(toUserSnapshot));
+    if (!permsRes.error && permsRes.data) setPermissionsSnapshot(mapPermissions(permsRes.data));
+  };
+
   useEffect(() => {
     const load = async () => {
       if (!isSupabaseConfigured || !supabase) {
@@ -317,193 +357,221 @@ export function SuratProvider({ children }: { children: ReactNode }) {
       }
 
       const [
-        masukRes,
-        keluarRes,
-        disposisiRes,
-        templateRes,
+        masukCountRes,
+        keluarCountRes,
+        disposisiCountRes,
+        templateCountRes,
         settingsRes,
-        metaRes,
-        usersRes,
         permsRes,
       ] = await Promise.all([
-        supabase.from('surat_masuk').select('*').order('tanggal_surat', { ascending: false }),
-        supabase.from('surat_keluar').select('*').order('tanggal_surat', { ascending: false }),
-        supabase.from('disposisi').select('*').order('created_at', { ascending: false }),
-        supabase.from('surat_templates').select('*').order('nama', { ascending: true }),
-        supabase.from('app_settings').select('data').eq('id', 'school').limit(1),
-        supabase.from('app_meta').select('key,value').in('key', [META_DEMO_MODE, META_BACKUP_HISTORY]),
-        supabase.from('users').select('*'),
-        supabase.from('permissions').select('role,features'),
+        supabase.from('surat_masuk').select('id').limit(1),
+        supabase.from('surat_keluar').select('id').limit(1),
+        supabase.from('disposisi').select('id').limit(1),
+        supabase.from('surat_templates').select('id').limit(1),
+        supabase.from('app_settings').select('id').eq('id', 'school').limit(1),
+        supabase.from('permissions').select('role').limit(1),
       ]);
 
-      if (!masukRes.error) {
-        const mapped = (masukRes.data ?? []).map(normalizeSuratMasuk);
-        if (mapped.length > 0) setSuratMasuk(mapped);
-        if (mapped.length === 0) await supabase.from('surat_masuk').upsert(SAMPLE_SURAT_MASUK.map(toSuratMasukRow), { onConflict: 'id' });
+      if (!masukCountRes.error && (masukCountRes.data ?? []).length === 0) {
+        await supabase.from('surat_masuk').upsert(SAMPLE_SURAT_MASUK.map(toSuratMasukRow), { onConflict: 'id' });
       }
-      if (!keluarRes.error) {
-        const mapped = (keluarRes.data ?? []).map(normalizeSuratKeluar);
-        if (mapped.length > 0) setSuratKeluar(mapped);
-        if (mapped.length === 0) await supabase.from('surat_keluar').upsert(SAMPLE_SURAT_KELUAR.map(toSuratKeluarRow), { onConflict: 'id' });
+      if (!keluarCountRes.error && (keluarCountRes.data ?? []).length === 0) {
+        await supabase.from('surat_keluar').upsert(SAMPLE_SURAT_KELUAR.map(toSuratKeluarRow), { onConflict: 'id' });
       }
-      if (!disposisiRes.error) {
-        const mapped = (disposisiRes.data ?? []).map(normalizeDisposisi);
-        if (mapped.length > 0) setDisposisi(mapped);
-        if (mapped.length === 0) await supabase.from('disposisi').upsert(SAMPLE_DISPOSISI.map(toDisposisiRow), { onConflict: 'id' });
+      if (!disposisiCountRes.error && (disposisiCountRes.data ?? []).length === 0) {
+        await supabase.from('disposisi').upsert(SAMPLE_DISPOSISI.map(toDisposisiRow), { onConflict: 'id' });
       }
-      if (!templateRes.error) {
-        const mapped = (templateRes.data ?? []).map(normalizeTemplate);
-        if (mapped.length > 0) setTemplates(mapped);
-        if (mapped.length === 0) await supabase.from('surat_templates').upsert(DEFAULT_TEMPLATES.map(toTemplateRow), { onConflict: 'id' });
+      if (!templateCountRes.error && (templateCountRes.data ?? []).length === 0) {
+        await supabase.from('surat_templates').upsert(DEFAULT_TEMPLATES.map(toTemplateRow), { onConflict: 'id' });
       }
-      if (!settingsRes.error) {
-        const row = settingsRes.data?.[0];
-        if (row?.data?.namaSekolah) {
-          setSettingsState(row.data as SchoolSettings);
-        } else {
-          await supabase.from('app_settings').upsert({ id: 'school', data: DEFAULT_SETTINGS }, { onConflict: 'id' });
-        }
+      if (!settingsRes.error && (settingsRes.data ?? []).length === 0) {
+        await supabase.from('app_settings').upsert({ id: 'school', data: DEFAULT_SETTINGS }, { onConflict: 'id' });
       }
-      if (!metaRes.error) {
-        const demo = metaRes.data?.find(m => m.key === META_DEMO_MODE)?.value;
-        const history = metaRes.data?.find(m => m.key === META_BACKUP_HISTORY)?.value;
-        if (typeof demo === 'boolean') setDemoModeState(demo);
-        if (Array.isArray(history)) setBackupHistory(history as BackupHistoryItem[]);
-      }
-      if (!usersRes.error && usersRes.data) {
-        setUsersSnapshot(usersRes.data.map(toUserSnapshot));
-      }
-      if (!permsRes.error && permsRes.data && permsRes.data.length > 0) {
-        setPermissionsSnapshot(mapPermissions(permsRes.data));
-      } else if (!permsRes.error && (!permsRes.data || permsRes.data.length === 0)) {
+      if (!permsRes.error && (!permsRes.data || permsRes.data.length === 0)) {
         await supabase.from('permissions').upsert([
           { role: 'admin', features: DEFAULT_PERMISSIONS.admin },
           { role: 'operator', features: DEFAULT_PERMISSIONS.operator },
           { role: 'kepala_sekolah', features: DEFAULT_PERMISSIONS.kepala_sekolah },
         ], { onConflict: 'role' });
       }
-
-      const refreshMasuk = await supabase.from('surat_masuk').select('*').order('tanggal_surat', { ascending: false });
-      const refreshKeluar = await supabase.from('surat_keluar').select('*').order('tanggal_surat', { ascending: false });
-      const refreshDisposisi = await supabase.from('disposisi').select('*').order('created_at', { ascending: false });
-      const refreshTemplate = await supabase.from('surat_templates').select('*').order('nama', { ascending: true });
-      if (!refreshMasuk.error && refreshMasuk.data) setSuratMasuk(refreshMasuk.data.map(normalizeSuratMasuk));
-      if (!refreshKeluar.error && refreshKeluar.data) setSuratKeluar(refreshKeluar.data.map(normalizeSuratKeluar));
-      if (!refreshDisposisi.error && refreshDisposisi.data) setDisposisi(refreshDisposisi.data.map(normalizeDisposisi));
-      if (!refreshTemplate.error && refreshTemplate.data) setTemplates(refreshTemplate.data.map(normalizeTemplate));
+      await syncFromSupabase();
     };
     void load();
   }, []);
 
   const setDemoMode = (v: boolean) => {
-    setDemoModeState(v);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('app_meta').upsert({ key: META_DEMO_MODE, value: v }, { onConflict: 'key' });
+      void (async () => {
+        await supabase.from('app_meta').upsert({ key: META_DEMO_MODE, value: v }, { onConflict: 'key' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setDemoModeState(v);
   };
 
   const addSuratMasuk = (s: SuratMasuk) => {
-    setSuratMasuk(prev => [s, ...prev]);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_masuk').upsert(toSuratMasukRow(s), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('surat_masuk').upsert(toSuratMasukRow(s), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSuratMasuk(prev => [s, ...prev]);
   };
 
   const updateSuratMasuk = (s: SuratMasuk) => {
-    setSuratMasuk(prev => prev.map(x => x.id === s.id ? s : x));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_masuk').upsert(toSuratMasukRow(s), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('surat_masuk').upsert(toSuratMasukRow(s), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSuratMasuk(prev => prev.map(x => x.id === s.id ? s : x));
   };
 
   const deleteSuratMasuk = (id: string) => {
-    setSuratMasuk(prev => prev.filter(x => x.id !== id));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_masuk').delete().eq('id', id);
+      void (async () => {
+        await supabase.from('surat_masuk').delete().eq('id', id);
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSuratMasuk(prev => prev.filter(x => x.id !== id));
   };
 
   const addSuratKeluar = (s: SuratKeluar) => {
-    setSuratKeluar(prev => [s, ...prev]);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_keluar').upsert(toSuratKeluarRow(s), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('surat_keluar').upsert(toSuratKeluarRow(s), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSuratKeluar(prev => [s, ...prev]);
   };
 
   const updateSuratKeluar = (s: SuratKeluar) => {
-    setSuratKeluar(prev => prev.map(x => x.id === s.id ? s : x));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_keluar').upsert(toSuratKeluarRow(s), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('surat_keluar').upsert(toSuratKeluarRow(s), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSuratKeluar(prev => prev.map(x => x.id === s.id ? s : x));
   };
 
   const deleteSuratKeluar = (id: string) => {
-    setSuratKeluar(prev => prev.filter(x => x.id !== id));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_keluar').delete().eq('id', id);
+      void (async () => {
+        await supabase.from('surat_keluar').delete().eq('id', id);
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSuratKeluar(prev => prev.filter(x => x.id !== id));
   };
 
   const addDisposisi = (d: Disposisi) => {
-    setDisposisi(prev => [d, ...prev]);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('disposisi').upsert(toDisposisiRow(d), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('disposisi').upsert(toDisposisiRow(d), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setDisposisi(prev => [d, ...prev]);
   };
 
   const updateDisposisi = (d: Disposisi) => {
-    setDisposisi(prev => prev.map(x => x.id === d.id ? d : x));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('disposisi').upsert(toDisposisiRow(d), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('disposisi').upsert(toDisposisiRow(d), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setDisposisi(prev => prev.map(x => x.id === d.id ? d : x));
   };
 
   const deleteDisposisi = (id: string) => {
-    setDisposisi(prev => prev.filter(x => x.id !== id));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('disposisi').delete().eq('id', id);
+      void (async () => {
+        await supabase.from('disposisi').delete().eq('id', id);
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setDisposisi(prev => prev.filter(x => x.id !== id));
   };
 
   const addTemplate = (t: SuratTemplate) => {
-    setTemplates(prev => [t, ...prev]);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_templates').upsert(toTemplateRow(t), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('surat_templates').upsert(toTemplateRow(t), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setTemplates(prev => [t, ...prev]);
   };
 
   const updateTemplate = (t: SuratTemplate) => {
-    setTemplates(prev => prev.map(x => x.id === t.id ? t : x));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_templates').upsert(toTemplateRow(t), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('surat_templates').upsert(toTemplateRow(t), { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setTemplates(prev => prev.map(x => x.id === t.id ? t : x));
   };
 
   const deleteTemplate = (id: string) => {
-    setTemplates(prev => prev.filter(x => x.id !== id));
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('surat_templates').delete().eq('id', id);
+      void (async () => {
+        await supabase.from('surat_templates').delete().eq('id', id);
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setTemplates(prev => prev.filter(x => x.id !== id));
   };
 
   const updateSettings = (s: SchoolSettings) => {
-    setSettingsState(s);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('app_settings').upsert({ id: 'school', data: s }, { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('app_settings').upsert({ id: 'school', data: s }, { onConflict: 'id' });
+        await syncFromSupabase();
+      })();
+      return;
     }
+    setSettingsState(s);
   };
 
   const importData = (data: { suratMasuk?: SuratMasuk[]; suratKeluar?: SuratKeluar[] }) => {
     if (data.suratMasuk && data.suratMasuk.length > 0) {
-      setSuratMasuk(prev => [...data.suratMasuk!, ...prev]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('surat_masuk').upsert(data.suratMasuk.map(toSuratMasukRow), { onConflict: 'id' });
+        void (async () => {
+          await supabase.from('surat_masuk').upsert(data.suratMasuk!.map(toSuratMasukRow), { onConflict: 'id' });
+          await syncFromSupabase();
+        })();
+      } else {
+        setSuratMasuk(prev => [...data.suratMasuk!, ...prev]);
       }
     }
     if (data.suratKeluar && data.suratKeluar.length > 0) {
-      setSuratKeluar(prev => [...data.suratKeluar!, ...prev]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('surat_keluar').upsert(data.suratKeluar.map(toSuratKeluarRow), { onConflict: 'id' });
+        void (async () => {
+          await supabase.from('surat_keluar').upsert(data.suratKeluar!.map(toSuratKeluarRow), { onConflict: 'id' });
+          await syncFromSupabase();
+        })();
+      } else {
+        setSuratKeluar(prev => [...data.suratKeluar!, ...prev]);
       }
     }
   };
@@ -555,59 +623,87 @@ export function SuratProvider({ children }: { children: ReactNode }) {
       const d = backup.data;
 
       if (d.suratMasuk && Array.isArray(d.suratMasuk)) {
-        setSuratMasuk(d.suratMasuk);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('surat_masuk').upsert(d.suratMasuk.map(toSuratMasukRow), { onConflict: 'id' });
+          void (async () => {
+            await supabase.from('surat_masuk').upsert(d.suratMasuk.map(toSuratMasukRow), { onConflict: 'id' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setSuratMasuk(d.suratMasuk);
         }
       }
       if (d.suratKeluar && Array.isArray(d.suratKeluar)) {
-        setSuratKeluar(d.suratKeluar);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('surat_keluar').upsert(d.suratKeluar.map(toSuratKeluarRow), { onConflict: 'id' });
+          void (async () => {
+            await supabase.from('surat_keluar').upsert(d.suratKeluar.map(toSuratKeluarRow), { onConflict: 'id' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setSuratKeluar(d.suratKeluar);
         }
       }
       if (d.disposisi && Array.isArray(d.disposisi)) {
-        setDisposisi(d.disposisi);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('disposisi').upsert(d.disposisi.map(toDisposisiRow), { onConflict: 'id' });
+          void (async () => {
+            await supabase.from('disposisi').upsert(d.disposisi.map(toDisposisiRow), { onConflict: 'id' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setDisposisi(d.disposisi);
         }
       }
       if (d.templates && Array.isArray(d.templates)) {
-        setTemplates(d.templates);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('surat_templates').upsert(d.templates.map(toTemplateRow), { onConflict: 'id' });
+          void (async () => {
+            await supabase.from('surat_templates').upsert(d.templates.map(toTemplateRow), { onConflict: 'id' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setTemplates(d.templates);
         }
       }
       if (d.settings && d.settings.namaSekolah) {
-        setSettingsState(d.settings);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('app_settings').upsert({ id: 'school', data: d.settings }, { onConflict: 'id' });
+          void (async () => {
+            await supabase.from('app_settings').upsert({ id: 'school', data: d.settings }, { onConflict: 'id' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setSettingsState(d.settings);
         }
       }
       if (d.users && Array.isArray(d.users)) {
         const normalizedUsers = (d.users as any[]).map(toUserSnapshot);
-        setUsersSnapshot(normalizedUsers);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('users').upsert(normalizedUsers.map(u => ({
-            id: u.id,
-            username: u.username,
-            password: u.password,
-            name: u.name,
-            role: u.role,
-            nip: u.nip || null,
-            active: u.active,
-          })), { onConflict: 'id' });
+          void (async () => {
+            await supabase.from('users').upsert(normalizedUsers.map(u => ({
+              id: u.id,
+              username: u.username,
+              password: u.password,
+              name: u.name,
+              role: u.role,
+              nip: u.nip || null,
+              active: u.active,
+            })), { onConflict: 'id' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setUsersSnapshot(normalizedUsers);
         }
       }
       if (d.permissions && typeof d.permissions === 'object') {
         const restored = d.permissions as RolePermissions;
-        setPermissionsSnapshot(restored);
         if (isSupabaseConfigured && supabase) {
-          void supabase.from('permissions').upsert([
-            { role: 'admin', features: restored.admin || [] },
-            { role: 'operator', features: restored.operator || [] },
-            { role: 'kepala_sekolah', features: restored.kepala_sekolah || [] },
-          ], { onConflict: 'role' });
+          void (async () => {
+            await supabase.from('permissions').upsert([
+              { role: 'admin', features: restored.admin || [] },
+              { role: 'operator', features: restored.operator || [] },
+              { role: 'kepala_sekolah', features: restored.kepala_sekolah || [] },
+            ], { onConflict: 'role' });
+            await syncFromSupabase();
+          })();
+        } else {
+          setPermissionsSnapshot(restored);
         }
       }
       if (d.demoMode !== undefined) {
@@ -625,51 +721,83 @@ export function SuratProvider({ children }: { children: ReactNode }) {
 
   const clearDatabase = (options: ClearOptions) => {
     if (options.suratMasuk) {
-      setSuratMasuk([]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('surat_masuk').delete().neq('id', '');
+        void (async () => {
+          await supabase.from('surat_masuk').delete().neq('id', '');
+          await syncFromSupabase();
+        })();
+      } else {
+        setSuratMasuk([]);
       }
     }
     if (options.suratKeluar) {
-      setSuratKeluar([]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('surat_keluar').delete().neq('id', '');
+        void (async () => {
+          await supabase.from('surat_keluar').delete().neq('id', '');
+          await syncFromSupabase();
+        })();
+      } else {
+        setSuratKeluar([]);
       }
     }
     if (options.disposisi) {
-      setDisposisi([]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('disposisi').delete().neq('id', '');
+        void (async () => {
+          await supabase.from('disposisi').delete().neq('id', '');
+          await syncFromSupabase();
+        })();
+      } else {
+        setDisposisi([]);
       }
     }
     if (options.templates) {
-      setTemplates([]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('surat_templates').delete().neq('id', '');
+        void (async () => {
+          await supabase.from('surat_templates').delete().neq('id', '');
+          await syncFromSupabase();
+        })();
+      } else {
+        setTemplates([]);
       }
     }
     if (options.settings) {
-      setSettingsState(DEFAULT_SETTINGS);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('app_settings').upsert({ id: 'school', data: DEFAULT_SETTINGS }, { onConflict: 'id' });
+        void (async () => {
+          await supabase.from('app_settings').upsert({ id: 'school', data: DEFAULT_SETTINGS }, { onConflict: 'id' });
+          await syncFromSupabase();
+        })();
+      } else {
+        setSettingsState(DEFAULT_SETTINGS);
       }
     }
     if (options.users) {
-      setUsersSnapshot([]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('users').delete().neq('id', '');
+        void (async () => {
+          await supabase.from('users').delete().neq('id', '');
+          await syncFromSupabase();
+        })();
+      } else {
+        setUsersSnapshot([]);
       }
     }
     if (options.permissions) {
-      setPermissionsSnapshot(DEFAULT_PERMISSIONS);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('permissions').delete().in('role', ['admin', 'operator', 'kepala_sekolah']);
+        void (async () => {
+          await supabase.from('permissions').delete().in('role', ['admin', 'operator', 'kepala_sekolah']);
+          await syncFromSupabase();
+        })();
+      } else {
+        setPermissionsSnapshot(DEFAULT_PERMISSIONS);
       }
     }
     if (options.backupHistory) {
-      setBackupHistory([]);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('app_meta').upsert({ key: META_BACKUP_HISTORY, value: [] }, { onConflict: 'key' });
+        void (async () => {
+          await supabase.from('app_meta').upsert({ key: META_BACKUP_HISTORY, value: [] }, { onConflict: 'key' });
+          await syncFromSupabase();
+        })();
+      } else {
+        setBackupHistory([]);
       }
     }
   };
@@ -680,7 +808,10 @@ export function SuratProvider({ children }: { children: ReactNode }) {
     setBackupHistory(prev => {
       const updated = [item, ...prev].slice(0, 50);
       if (isSupabaseConfigured && supabase) {
-        void supabase.from('app_meta').upsert({ key: META_BACKUP_HISTORY, value: updated }, { onConflict: 'key' });
+        void (async () => {
+          await supabase.from('app_meta').upsert({ key: META_BACKUP_HISTORY, value: updated }, { onConflict: 'key' });
+          await syncFromSupabase();
+        })();
       }
       return updated;
     });

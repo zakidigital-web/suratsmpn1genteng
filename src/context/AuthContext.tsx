@@ -67,6 +67,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [users, setUsers] = useState<User[]>(DEFAULT_USERS);
   const [permissions, setPermissions] = useState<RolePermissions>(DEFAULT_PERMISSIONS);
 
+  const syncUsersFromSupabase = async () => {
+    if (!isSupabaseConfigured || !supabase) return users;
+    const usersRes = await supabase.from('users').select('*').order('name', { ascending: true });
+    if (usersRes.error) return users;
+    const nextUsers = (usersRes.data ?? []).map(normalizeUser);
+    setUsers(nextUsers);
+    return nextUsers;
+  };
+
+  const syncPermissionsFromSupabase = async () => {
+    if (!isSupabaseConfigured || !supabase) return permissions;
+    const permsRes = await supabase.from('permissions').select('role,features');
+    if (permsRes.error) return permissions;
+    const nextPermissions = mapPermissionRows(permsRes.data ?? []);
+    setPermissions(nextPermissions);
+    return nextPermissions;
+  };
+
   useEffect(() => {
     const load = async () => {
       if (!isSupabaseConfigured || !supabase) {
@@ -78,28 +96,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const usersRes = await supabase.from('users').select('*').order('name', { ascending: true });
-      let nextUsers = usersRes.data?.map(normalizeUser) ?? [];
-      if (!usersRes.error && nextUsers.length === 0) {
+      const usersRes = await supabase.from('users').select('id').limit(1);
+      if (!usersRes.error && (usersRes.data ?? []).length === 0) {
         await supabase.from('users').upsert(DEFAULT_USERS.map(toUserRow));
-        const seededUsers = await supabase.from('users').select('*').order('name', { ascending: true });
-        nextUsers = seededUsers.data?.map(normalizeUser) ?? DEFAULT_USERS;
       }
-      if (usersRes.error) {
-        nextUsers = DEFAULT_USERS;
-      }
-      setUsers(nextUsers);
 
-      const permsRes = await supabase.from('permissions').select('role,features');
-      let nextPermissions = permsRes.data ? mapPermissionRows(permsRes.data) : DEFAULT_PERMISSIONS;
-      if (!permsRes.error && (!permsRes.data || permsRes.data.length === 0)) {
+      const permsRes = await supabase.from('permissions').select('role').limit(1);
+      if (!permsRes.error && (permsRes.data ?? []).length === 0) {
         await supabase.from('permissions').upsert(buildPermissionRows(DEFAULT_PERMISSIONS), { onConflict: 'role' });
-        nextPermissions = DEFAULT_PERMISSIONS;
       }
-      if (permsRes.error) {
-        nextPermissions = DEFAULT_PERMISSIONS;
-      }
-      setPermissions(nextPermissions);
+
+      const nextUsers = await syncUsersFromSupabase();
+      await syncPermissionsFromSupabase();
 
       const sessionId = sessionStorage.getItem(SESSION_KEY);
       if (sessionId) {
@@ -154,39 +162,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const addUser = (u: User) => {
-    setUsers(prev => [...prev, u]);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('users').upsert(toUserRow(u), { onConflict: 'id' });
+      void (async () => {
+        await supabase.from('users').upsert(toUserRow(u), { onConflict: 'id' });
+        await syncUsersFromSupabase();
+      })();
+      return;
     }
+    setUsers(prev => [...prev, u]);
   };
 
   const updateUser = (u: User) => {
+    if (isSupabaseConfigured && supabase) {
+      void (async () => {
+        await supabase.from('users').upsert(toUserRow(u), { onConflict: 'id' });
+        const nextUsers = await syncUsersFromSupabase();
+        if (user && user.id === u.id) {
+          const nextCurrent = nextUsers.find(x => x.id === u.id) ?? null;
+          setUser(nextCurrent);
+          if (nextCurrent) {
+            sessionStorage.setItem(SESSION_KEY, nextCurrent.id);
+          }
+        }
+      })();
+      return;
+    }
     setUsers(prev => prev.map(x => x.id === u.id ? u : x));
     if (user && user.id === u.id) {
       setUser(u);
       sessionStorage.setItem(SESSION_KEY, u.id);
     }
-    if (isSupabaseConfigured && supabase) {
-      void supabase.from('users').upsert(toUserRow(u), { onConflict: 'id' });
-    }
   };
 
   const deleteUser = (id: string) => {
+    if (isSupabaseConfigured && supabase) {
+      void (async () => {
+        await supabase.from('users').delete().eq('id', id);
+        await syncUsersFromSupabase();
+        if (user?.id === id) {
+          setUser(null);
+          sessionStorage.removeItem(SESSION_KEY);
+        }
+      })();
+      return;
+    }
     setUsers(prev => prev.filter(x => x.id !== id));
     if (user?.id === id) {
       setUser(null);
       sessionStorage.removeItem(SESSION_KEY);
     }
-    if (isSupabaseConfigured && supabase) {
-      void supabase.from('users').delete().eq('id', id);
-    }
   };
 
   const updatePermissions = (p: RolePermissions) => {
-    setPermissions(p);
     if (isSupabaseConfigured && supabase) {
-      void supabase.from('permissions').upsert(buildPermissionRows(p), { onConflict: 'role' });
+      void (async () => {
+        await supabase.from('permissions').upsert(buildPermissionRows(p), { onConflict: 'role' });
+        await syncPermissionsFromSupabase();
+      })();
+      return;
     }
+    setPermissions(p);
   };
 
   const hasFeatureAccess = (feature: FeatureKey): boolean => {
@@ -203,10 +238,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const foundRes = await supabase.from('users').select('*').eq('id', userId).limit(1);
       const target = foundRes.data?.[0] ? normalizeUser(foundRes.data[0]) : null;
       if (!target || target.password !== oldPass) return false;
-      const updated: User = { ...target, password: newPass };
       await supabase.from('users').update({ password: newPass }).eq('id', userId);
-      setUsers(prev => prev.map(x => x.id === userId ? updated : x));
-      if (user?.id === userId) setUser(updated);
+      const nextUsers = await syncUsersFromSupabase();
+      if (user?.id === userId) {
+        const nextCurrent = nextUsers.find(x => x.id === userId) ?? null;
+        setUser(nextCurrent);
+      }
       return true;
     }
 
