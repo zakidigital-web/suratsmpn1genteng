@@ -22,7 +22,7 @@ export default function LoginPage() {
 
     await new Promise(r => setTimeout(r, 800));
 
-    if (login(username, password)) {
+    if (await login(username, password)) {
       navigate('/dashboard');
     } else {
       setError('Username atau password salah!');

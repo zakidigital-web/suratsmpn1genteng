@@ -214,13 +214,17 @@ export default function PengaturanPage() {
 
   const handleClearAll = () => {
     if (confirmReset) {
-      const keys = [
-        'surat_masuk', 'surat_keluar', 'disposisi', 'surat_templates',
-        'surat_settings', 'surat_users', 'surat_permissions', 'surat_current_user',
-        'surat_backup_history'
-      ];
-      keys.forEach(k => localStorage.removeItem(k));
-      localStorage.setItem('surat_demo_mode', JSON.stringify(demoMode));
+      clearDatabase({
+        suratMasuk: true,
+        suratKeluar: true,
+        disposisi: true,
+        templates: true,
+        settings: true,
+        users: true,
+        permissions: true,
+        backupHistory: true,
+      });
+      setDemoMode(demoMode);
       setConfirmReset(false);
       window.location.reload();
     } else {

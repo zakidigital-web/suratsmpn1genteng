@@ -37,7 +37,7 @@ export default function ProfilPage() {
     setTimeout(() => setSaved(''), 3000);
   };
 
-  const handleChangePassword = () => {
+  const handleChangePassword = async () => {
     setError('');
     if (!oldPass || !newPass || !confirmPass) {
       setError('Semua field wajib diisi!');
@@ -51,7 +51,7 @@ export default function ProfilPage() {
       setError('Password baru dan konfirmasi tidak cocok!');
       return;
     }
-    const success = changePassword(user.id, oldPass, newPass);
+    const success = await changePassword(user.id, oldPass, newPass);
     if (!success) {
       setError('Password lama salah!');
       return;
